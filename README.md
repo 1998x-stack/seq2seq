@@ -96,6 +96,24 @@ Report train/validation token NLL and test BLEU (including decoding and tokenize
     tests/               Unit and offline integration tests
     docs/                Architecture, evaluation and research roadmap
 
+## Stage 02: controlled ablations and diagnostics
+
+Model stochasticity and corpus splitting now use separate random seeds. Run six architecture conditions on the same train/validation/test split:
+
+    seq2seq experiments plan -c configs/opus_books_lstm.yaml --seeds 42 43 44 --split-seed 2026
+    seq2seq experiments run -c configs/opus_books_lstm.yaml --output runs/stage02 --seeds 42 43 44 --split-seed 2026 --max-examples -1
+    seq2seq experiments summarize --output runs/stage02
+
+Each experiment records the dataset fingerprint, software/hardware environment, checkpoint, evaluation metrics and a JSONL of generated predictions. The combined report rejects mismatched data fingerprints.
+
+For detailed diagnostics on one trained checkpoint:
+
+    seq2seq evaluate --checkpoint runs/lstm-en-fr/best.pt --split test --max-examples -1 --predictions runs/lstm-en-fr/predictions.jsonl
+
+The evaluation calculates corpus BLEU against the original normalized reference rather than vocab-decoded gold labels (which would hide unknown target words), exports a SacreBLEU signature, and reports source length/OOV breakdowns.
+
+IMPORTANT: the OPUS Books en-fr dataset provides row IDs but no verified book IDs. Random splits are NOT book-disjoint. To evaluate generalization across books, prepare a JSONL with trusted book_id metadata and use the grouped data config example. See docs/stage02.md for the scientific protocol, limitations and exact commands. Real translation results require actually running the Hugging Face training jobs; offline CI only verifies the software.
+
 ## Development
 
     ruff check src tests
