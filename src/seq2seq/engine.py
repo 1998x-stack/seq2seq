@@ -17,7 +17,8 @@ from torch.nn import functional as F
 from seq2seq.config import validate_config
 from seq2seq.data import DataBundle, make_loader, prepare_data
 from seq2seq.diagnostics import export_jsonl, summarize_predictions
-from seq2seq.losses import masked_cross_entropy, perplexity
+from seq2seq.losses import perplexity
+from seq2seq.factory.components import DecoderFactory, LossFactory, OptimizerFactory, SchedulerFactory
 from seq2seq.model import Seq2Seq, build_model
 from seq2seq.telemetry import RunLogger, export_metrics_csv
 
@@ -46,12 +47,16 @@ def run_epoch(
     model: Seq2Seq, loader: Any, device: torch.device, cfg: dict,
     optimizer: torch.optim.Optimizer | None = None,
     on_step: Callable[[dict[str, Any]], None] | None = None,
+    epoch_index: int = 0,
 ) -> dict[str, float]:
     training = optimizer is not None
     model.train(training)
     sum_nll, correct, tokens = 0.0, 0, 0
     started = time.perf_counter()
+    objective_sum, examples = 0.0, 0
     for step, batch in enumerate(loader, 1):
+        if training:
+            SchedulerFactory.step(optimizer, cfg, epoch_index + (step - 1) / len(loader))
         batch = to_device(batch, device)
         if training:
             optimizer.zero_grad(set_to_none=True)
@@ -60,10 +65,14 @@ def run_epoch(
                 batch["src"], batch["src_lengths"], batch["tgt_in"],
                 teacher_forcing=float(cfg["training"].get("teacher_forcing", 1.0)) if training else 1.0,
             )
-            loss, count = masked_cross_entropy(
-                logits, batch["tgt_out"], pad_id=model.tgt_pad,
-                label_smoothing=float(cfg["training"].get("label_smoothing", 0.0)) if training else 0.0,
-            )
+            if training:
+                objective = LossFactory.create(cfg, pad_id=model.tgt_pad)
+            else:
+                objective = LossFactory.create(
+                    {"training": {"loss": "token_ce", "label_smoothing": 0.0}},
+                    pad_id=model.tgt_pad,
+                )
+            loss, count = objective(logits, batch["tgt_out"])
             if training:
                 loss.backward()
                 grad_norm = torch.nn.utils.clip_grad_norm_(
@@ -87,11 +96,18 @@ def run_epoch(
             correct += int(((logits.argmax(-1) == batch["tgt_out"]) & mask).sum().item())
             sum_nll += float(nll.item())
             tokens += count
+            if cfg["training"].get("loss", "token_ce") == "sequence_nll" and training:
+                objective_sum += float(loss.detach().item()) * batch["src"].size(0)
+                examples += batch["src"].size(0)
+            else:
+                objective_sum += float(loss.detach().item()) * count
+                examples += count
     if tokens == 0:
         raise ValueError("Empty dataloader")
     mean_nll = sum_nll / tokens
     elapsed = time.perf_counter() - started
     return {
+        "objective_loss": objective_sum / max(1, examples),
         "elapsed_seconds": elapsed,
         "tokens_per_second": tokens / max(elapsed, 1e-12),
         "nll": mean_nll,
@@ -121,8 +137,8 @@ def generation_metrics(
     rows: list[dict[str, Any]] = []
     for batch in loader:
         data = to_device(batch, device)
-        output = model.generate(
-            data["src"], data["src_lengths"],
+        output = DecoderFactory.create(cfg)(
+            model, data["src"], data["src_lengths"],
             bos_id=bundle.tgt_vocab.bos_id, eos_id=bundle.tgt_vocab.eos_id,
             max_new_tokens=int(cfg["training"]["max_new_tokens"]),
         )
@@ -213,10 +229,7 @@ def train(
     train_loader = make_loader(bundle, "train", cfg, shuffle=True)
     val_loader = make_loader(bundle, "validation", cfg)
     model = build_model(cfg, len(bundle.src_vocab), len(bundle.tgt_vocab)).to(device)
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=float(cfg["training"]["learning_rate"]),
-        weight_decay=float(cfg["training"].get("weight_decay", 0.0)),
-    )
+    optimizer = OptimizerFactory.create(model.parameters(), cfg)
     start_epoch, best_nll = 1, float("inf")
     if prior is not None:
         model.load_state_dict(prior["model"])
@@ -279,6 +292,8 @@ def train(
             )
         try:
             for epoch in range(start_epoch, int(cfg["training"]["epochs"]) + 1):
+                if hasattr(train_loader.batch_sampler, "set_epoch"):
+                    train_loader.batch_sampler.set_epoch(epoch - 1)
                 if enabled:
                     logger.emit("epoch_started", epoch=epoch)
                 def step_event(values: dict[str, Any], current_epoch: int = epoch) -> None:
@@ -292,7 +307,8 @@ def train(
                     logger.scalar("train/grad_norm", values["grad_norm"], global_step)
 
                 train_metrics = run_epoch(
-                    model, train_loader, device, cfg, optimizer, on_step=step_event
+                    model, train_loader, device, cfg, optimizer, on_step=step_event,
+                    epoch_index=epoch - 1,
                 )
                 val_metrics = run_epoch(model, val_loader, device, cfg)
                 is_best = val_metrics["nll"] < best_nll
@@ -390,8 +406,8 @@ def translate(
 
     lengths = torch.tensor([len(t) for t in encoded])
     src = pad_sequence(encoded, batch_first=True, padding_value=src_vocab.pad_id).to(device)
-    output = model.generate(
-        src, lengths, tgt_vocab.bos_id, tgt_vocab.eos_id,
+    output = DecoderFactory.create(cfg)(
+        model, src, lengths, tgt_vocab.bos_id, tgt_vocab.eos_id,
         int(cfg["training"]["max_new_tokens"]),
     )
     return [

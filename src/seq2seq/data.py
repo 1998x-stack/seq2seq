@@ -124,12 +124,12 @@ def prepare_data(cfg: dict, vocab_data: dict | None = None) -> DataBundle:
     if vocab_data is None:
         src_vocab = Vocabulary.build(
             [tokenizer.tokenize(src) for src, _ in train],
-            int(tc.get("vocab_size", 12000)),
+            int(tc.get("src_vocab_size", tc.get("vocab_size", 12000))),
             int(tc.get("min_freq", 1)),
         )
         tgt_vocab = Vocabulary.build(
             [tokenizer.tokenize(tgt) for _, tgt in train],
-            int(tc.get("vocab_size", 12000)),
+            int(tc.get("tgt_vocab_size", tc.get("vocab_size", 12000))),
             int(tc.get("min_freq", 1)),
         )
     else:

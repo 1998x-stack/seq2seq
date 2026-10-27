@@ -4,6 +4,8 @@ import torch
 from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
+from seq2seq.factory.registry import CELL_REGISTRY
+
 State = torch.Tensor | tuple[torch.Tensor, torch.Tensor]
 
 
@@ -14,8 +16,8 @@ class Encoder(nn.Module):
     ) -> None:
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=pad_id)
-        recurrent = nn.LSTM if cell == "lstm" else nn.RNN
-        self.rnn = recurrent(
+        self.rnn = CELL_REGISTRY.create(
+            cell,
             embedding_dim, hidden_dim, num_layers=layers, batch_first=True,
             dropout=dropout if layers > 1 else 0,
         )
@@ -58,8 +60,8 @@ class Decoder(nn.Module):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=pad_id)
         self.attention = AdditiveAttention(hidden_dim) if attention else None
-        recurrent = nn.LSTM if cell == "lstm" else nn.RNN
-        self.rnn = recurrent(
+        self.rnn = CELL_REGISTRY.create(
+            cell,
             embedding_dim + (hidden_dim if attention else 0),
             hidden_dim, num_layers=layers, batch_first=True,
             dropout=dropout if layers > 1 else 0,
@@ -147,4 +149,6 @@ class Seq2Seq(nn.Module):
 
 
 def build_model(cfg: dict, src_size: int, tgt_size: int) -> Seq2Seq:
-    return Seq2Seq(src_size, tgt_size, cfg["model"])
+    from seq2seq.factory.components import ModelFactory
+
+    return ModelFactory.create(cfg, src_size, tgt_size)

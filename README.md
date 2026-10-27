@@ -26,6 +26,26 @@ On this branch, every training run records UTC JSONL events and epoch-level CSV 
 
 The generated HTML is self-contained and uses only real recorded metrics. The above offline toy example is for checking the pipeline, not for claiming translation quality. Full Hugging Face experiments still require training. See [docs/ablation.md](docs/ablation.md) for the logging contract, metric definitions, TensorBoard instructions and six-model comparison procedure.
 
+## 2014 paper-grounded Factory Mode (experimental branch)
+
+Branch: feat/paper1409-factory-mode, derived from ablation. Actual training, inference,
+data batching, and evaluation are wired to model/cell/loss/optimizer/scheduler/
+decoder/data-loader factories. A frozen YAML plan defines each paper-related
+ablation; all runs retain CSV/JSONL/TensorBoard-compatible logs and HTML charts.
+
+    git switch feat/paper1409-factory-mode
+    pip install -e ".[dev]"
+    seq2seq factory plan --spec configs/factory/paper_ablation.yaml
+    seq2seq factory run --spec configs/factory/smoke_factory.yaml --output runs/factory-smoke --limit 1 --max-examples 4
+    seq2seq factory visualize --output runs/factory-smoke
+
+The reference config in configs/factory/paper_reference_architecture.yaml
+records original dimensions (4-layer/1000 hidden, 160k/80k vocab), but uses a
+different corpus and is NOT an exact reproduction of the 2014 training system.
+The smaller OPUS configuration is the recommended research starting point.
+See docs/paper1409-factory.md for paper section mappings, experimental caveats,
+objective definitions, and the 30-run study protocol.
+
 ## Quick start
 
 Python 3.11+ recommended. Install PyTorch for your device as directed by pytorch.org and then install this package.
