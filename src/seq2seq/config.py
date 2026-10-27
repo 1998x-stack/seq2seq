@@ -56,6 +56,10 @@ def validate_config(cfg: dict[str, Any]) -> None:
         raise ValueError("training.epochs must be positive")
     if float(training.get("learning_rate", 0)) <= 0:
         raise ValueError("training.learning_rate must be positive")
+    if not isinstance(cfg.get("logging", {}), dict):
+        raise TypeError("logging must be a YAML mapping")
+    if int(cfg.get("logging", {}).get("log_every_steps", 20)) < 0:
+        raise ValueError("logging.log_every_steps must be nonnegative")
     for field in ("teacher_forcing", "label_smoothing"):
         value = float(training.get(field, 0))
         if not 0 <= value <= 1:

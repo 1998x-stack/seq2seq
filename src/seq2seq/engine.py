@@ -4,9 +4,10 @@ import json
 import os
 import platform
 import random
+import time
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import torch
 import yaml
@@ -17,6 +18,7 @@ from seq2seq.data import DataBundle, make_loader, prepare_data
 from seq2seq.diagnostics import export_jsonl, summarize_predictions
 from seq2seq.losses import masked_cross_entropy, perplexity
 from seq2seq.model import Seq2Seq, build_model
+from seq2seq.telemetry import RunLogger, export_metrics_csv
 
 
 def set_seed(seed: int) -> None:
@@ -41,12 +43,14 @@ def to_device(batch: dict[str, torch.Tensor], device: torch.device) -> dict[str,
 
 def run_epoch(
     model: Seq2Seq, loader: Any, device: torch.device, cfg: dict,
-    optimizer: torch.optim.Optimizer | None = None
+    optimizer: torch.optim.Optimizer | None = None,
+    on_step: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, float]:
     training = optimizer is not None
     model.train(training)
     sum_nll, correct, tokens = 0.0, 0, 0
-    for batch in loader:
+    started = time.perf_counter()
+    for step, batch in enumerate(loader, 1):
         batch = to_device(batch, device)
         if training:
             optimizer.zero_grad(set_to_none=True)
@@ -61,10 +65,17 @@ def run_epoch(
             )
             if training:
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(
+                grad_norm = torch.nn.utils.clip_grad_norm_(
                     model.parameters(), float(cfg["training"].get("grad_clip", 1.0))
                 )
                 optimizer.step()
+                if on_step is not None:
+                    on_step({
+                        "step": step, "batch_tokens": count,
+                        "batch_loss": float(loss.detach().item()),
+                        "grad_norm": float(grad_norm.item()),
+                        "elapsed_seconds": time.perf_counter() - started,
+                    })
         with torch.no_grad():
             nll = F.cross_entropy(
                 logits.detach().reshape(-1, logits.size(-1)),
@@ -78,7 +89,10 @@ def run_epoch(
     if tokens == 0:
         raise ValueError("Empty dataloader")
     mean_nll = sum_nll / tokens
+    elapsed = time.perf_counter() - started
     return {
+        "elapsed_seconds": elapsed,
+        "tokens_per_second": tokens / max(elapsed, 1e-12),
         "nll": mean_nll,
         "perplexity": perplexity(mean_nll),
         "token_accuracy": correct / tokens,
@@ -248,20 +262,84 @@ def train(
     print(json.dumps(metadata, ensure_ascii=False), flush=True)
 
     latest: dict[str, Any] = {}
-    for epoch in range(start_epoch, int(cfg["training"]["epochs"]) + 1):
-        train_metrics = run_epoch(model, train_loader, device, cfg, optimizer)
-        val_metrics = run_epoch(model, val_loader, device, cfg)
-        row = {"epoch": epoch, "train": train_metrics, "validation": val_metrics}
-        is_best = val_metrics["nll"] < best_nll
-        if is_best:
-            best_nll = val_metrics["nll"]
-        save_checkpoint(output / "last.pt", model, optimizer, cfg, bundle, epoch, best_nll)
-        if is_best:
-            save_checkpoint(output / "best.pt", model, optimizer, cfg, bundle, epoch, best_nll)
-        with (output / "metrics.jsonl").open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
-        print(json.dumps(row, ensure_ascii=False), flush=True)
-        latest = row
+    logging_cfg = cfg.get("logging", {})
+    log_every = int(logging_cfg.get("log_every_steps", 20))
+    enabled = bool(logging_cfg.get("enabled", True))
+    with RunLogger(
+        output, name=output.name,
+        tensorboard=bool(logging_cfg.get("tensorboard", False)) if enabled else False,
+        console=enabled,
+    ) as logger:
+        if enabled:
+            logger.emit(
+                "training_started", seed=seed, epochs=int(cfg["training"]["epochs"]),
+                starting_epoch=start_epoch, device=str(device),
+                data_fingerprint=bundle.fingerprint, parameters=metadata["parameters"],
+            )
+        try:
+            for epoch in range(start_epoch, int(cfg["training"]["epochs"]) + 1):
+                if enabled:
+                    logger.emit("epoch_started", epoch=epoch)
+                def step_event(values: dict[str, Any]) -> None:
+                    if not enabled or log_every <= 0:
+                        return
+                    if values["step"] % log_every != 0:
+                        return
+                    global_step = (epoch - 1) * len(train_loader) + values["step"]
+                    logger.emit("train_step", epoch=epoch, global_step=global_step, **values)
+                    logger.scalar("train/batch_loss", values["batch_loss"], global_step)
+                    logger.scalar("train/grad_norm", values["grad_norm"], global_step)
+
+                train_metrics = run_epoch(
+                    model, train_loader, device, cfg, optimizer, on_step=step_event
+                )
+                val_metrics = run_epoch(model, val_loader, device, cfg)
+                is_best = val_metrics["nll"] < best_nll
+                if is_best:
+                    best_nll = val_metrics["nll"]
+                lr = float(optimizer.param_groups[0]["lr"])
+                row = {
+                    "epoch": epoch, "train": train_metrics, "validation": val_metrics,
+                    "learning_rate": lr, "best_validation_nll": best_nll,
+                }
+                save_checkpoint(
+                    output / "last.pt", model, optimizer, cfg, bundle, epoch, best_nll
+                )
+                if is_best:
+                    save_checkpoint(
+                        output / "best.pt", model, optimizer, cfg, bundle, epoch, best_nll
+                    )
+                # Append one epoch only. Detect duplicate records on resume.
+                existing_epochs = set()
+                metrics_path = output / "metrics.jsonl"
+                if metrics_path.exists():
+                    existing_epochs = {
+                        int(json.loads(line)["epoch"])
+                        for line in metrics_path.read_text(encoding="utf-8").splitlines()
+                        if line.strip()
+                    }
+                if epoch in existing_epochs:
+                    raise ValueError(f"metrics.jsonl already contains epoch {epoch}")
+                with metrics_path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+                export_metrics_csv(output)
+                if enabled:
+                    logger.emit("epoch_completed", epoch=epoch, best=is_best,
+                                train=train_metrics, validation=val_metrics,
+                                learning_rate=lr, best_validation_nll=best_nll)
+                    for split, metrics in (("train", train_metrics), ("validation", val_metrics)):
+                        for name in ("nll", "perplexity", "token_accuracy", "tokens_per_second"):
+                            logger.scalar(f"{split}/{name}", metrics[name], epoch)
+                print(json.dumps(row, ensure_ascii=False), flush=True)
+                latest = row
+            if enabled:
+                logger.emit("training_completed", final_epoch=(
+                    latest.get("epoch", start_epoch - 1)
+                ))
+        except Exception as exc:
+            if enabled:
+                logger.emit("training_failed", error=repr(exc))
+            raise
     if latest:
         latest["output_dir"] = str(output)
     return latest

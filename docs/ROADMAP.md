@@ -36,7 +36,7 @@ Acceptance: offline tests/CI pass, then execute all 18 real corpus runs, compare
 - [ ] Beam Search with length normalization and early stopping.
 - [ ] Scheduled Sampling and exposure-bias diagnostics.
 - [ ] Beam/greedy oracle examples and optimality counterexamples.
-- [ ] TensorBoard / CSV charts, throughput/token timing, GPU profiling.
+- [x] JSONL/CSV logging, optional TensorBoard, offline interactive dashboard, basic token throughput timing (GPU profiling pending).
 - [ ] AMP and gradient accumulation for constrained GPUs.
 - [ ] Subword tokenizer with tokenizer-version tracking.
 

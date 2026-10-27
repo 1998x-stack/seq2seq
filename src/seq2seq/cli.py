@@ -7,6 +7,8 @@ from seq2seq.config import load_config
 from seq2seq.data import prepare_data
 from seq2seq.engine import evaluate, train, translate
 from seq2seq.experiments import make_plan, run_matrix, summarize
+from seq2seq.telemetry import export_metrics_csv
+from seq2seq.visualize import render_dashboard
 
 
 def main() -> None:
@@ -40,6 +42,13 @@ def main() -> None:
     experiment.add_argument("--max-examples", type=int, default=200)
     experiment.add_argument("--limit", type=int, default=None,
                             help="Run only the first N matrix entries (CI smoke)")
+    experiment.add_argument("--dashboard", action="store_true",
+                            help="Generate offline HTML dashboard after matrix run")
+    dashboard = sub.add_parser("visualize", help="Build interactive offline HTML dashboard")
+    dashboard.add_argument("--root", default="runs/stage02")
+    dashboard.add_argument("--output", default=None)
+    csv_cmd = sub.add_parser("export-csv", help="Export one run's epoch metrics to CSV")
+    csv_cmd.add_argument("--run", required=True)
     args = parser.parse_args()
 
     if args.command == "train":
@@ -70,8 +79,14 @@ def main() -> None:
                 args.max_examples, args.limit,
             )
             print(json.dumps(summarize(args.output), indent=2, ensure_ascii=False))
+            if args.dashboard:
+                print(render_dashboard(args.output))
         else:
             print(json.dumps(summarize(args.output), indent=2, ensure_ascii=False))
+    elif args.command == "visualize":
+        print(render_dashboard(args.root, args.output))
+    elif args.command == "export-csv":
+        print(export_metrics_csv(args.run))
     elif args.command == "translate":
         for src, tgt in zip(args.text, translate(args.checkpoint, args.text, args.device)):
             print(json.dumps({"source": src, "prediction": tgt}, ensure_ascii=False))

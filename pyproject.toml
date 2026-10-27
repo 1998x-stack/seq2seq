@@ -16,7 +16,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<10", "ruff>=0.6"]
+viz = ["plotly>=5.22,<7", "tensorboard>=2.16,<3"]
+dev = ["pytest>=8,<10", "ruff>=0.6", "plotly>=5.22,<7"]
 
 [project.scripts]
 seq2seq = "seq2seq.cli:main"
