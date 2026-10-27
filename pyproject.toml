@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "seq2seq-from-scratch"
+version = "0.1.0"
+description = "Educational PyTorch RNN/LSTM encoder-decoder baseline with Hugging Face datasets"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "torch>=2.2,<3",
+  "datasets>=2.20,<5",
+  "PyYAML>=6.0,<7",
+  "sacrebleu>=2.4,<3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff>=0.6"]
+
+[project.scripts]
+seq2seq = "seq2seq.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+include = ["src/**/*.py", "tests/**/*.py"]
