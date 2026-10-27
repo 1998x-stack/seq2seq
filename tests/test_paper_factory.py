@@ -9,14 +9,18 @@ import torch
 
 from seq2seq.config import load_config
 from seq2seq.data import make_loader, prepare_data
+from seq2seq.experiments import summarize
 from seq2seq.factory.batching import LengthBucketBatchSampler
 from seq2seq.factory.components import (
-    DecoderFactory, LossFactory, ModelFactory, OptimizerFactory, SchedulerFactory,
+    DecoderFactory,
+    LossFactory,
+    ModelFactory,
+    OptimizerFactory,
+    SchedulerFactory,
 )
 from seq2seq.factory.experiments import factory_plan, factory_run
 from seq2seq.factory.registry import Registry
 from seq2seq.model import build_model
-from seq2seq.experiments import summarize
 
 
 def config():
