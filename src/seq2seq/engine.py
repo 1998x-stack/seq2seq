@@ -7,7 +7,8 @@ import random
 import time
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import torch
 import yaml
@@ -280,13 +281,13 @@ def train(
             for epoch in range(start_epoch, int(cfg["training"]["epochs"]) + 1):
                 if enabled:
                     logger.emit("epoch_started", epoch=epoch)
-                def step_event(values: dict[str, Any]) -> None:
+                def step_event(values: dict[str, Any], current_epoch: int = epoch) -> None:
                     if not enabled or log_every <= 0:
                         return
                     if values["step"] % log_every != 0:
                         return
-                    global_step = (epoch - 1) * len(train_loader) + values["step"]
-                    logger.emit("train_step", epoch=epoch, global_step=global_step, **values)
+                    global_step = (current_epoch - 1) * len(train_loader) + values["step"]
+                    logger.emit("train_step", epoch=current_epoch, global_step=global_step, **values)
                     logger.scalar("train/batch_loss", values["batch_loss"], global_step)
                     logger.scalar("train/grad_norm", values["grad_norm"], global_step)
 

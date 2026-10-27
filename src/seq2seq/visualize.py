@@ -77,7 +77,7 @@ def render_dashboard(
             margin={"l": 55, "r": 25, "t": 48, "b": 58},
             height=420, hovermode="closest",
         )
-        return plot(fig, output_type="div", include_plotlyjs=True if bundle else False,
+        return plot(fig, output_type="div", include_plotlyjs=bundle,
                     config={"responsive": True, "displaylogo": False})
 
     # Each run is one series, with validation solid and train dotted.
