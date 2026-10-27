@@ -27,8 +27,8 @@ def validate_config(cfg: dict[str, Any]) -> None:
             raise ValueError(f"model.{field} must be positive")
     if not 0 <= float(model.get("dropout", 0)) < 1:
         raise ValueError("model.dropout must be in [0,1)")
-    if dataset.get("backend") not in ("huggingface", "toy"):
-        raise ValueError("dataset.backend must be 'huggingface' or 'toy'")
+    if dataset.get("backend") not in ("huggingface", "toy", "jsonl"):
+        raise ValueError("dataset.backend must be 'huggingface', 'jsonl' or 'toy'")
     val = float(dataset.get("validation_fraction", 0.05))
     test = float(dataset.get("test_fraction", 0.05))
     if val <= 0 or test <= 0 or val + test >= 1:
@@ -37,6 +37,15 @@ def validate_config(cfg: dict[str, Any]) -> None:
         raise ValueError("dataset.max_length must be at least 2")
     if int(dataset.get("max_samples", 0)) < 0:
         raise ValueError("dataset.max_samples cannot be negative")
+    if dataset.get("split_strategy", "random") not in ("random", "group"):
+        raise ValueError("dataset.split_strategy must be random or group")
+    if dataset.get("backend") == "jsonl" and not dataset.get("path"):
+        raise ValueError("dataset.path is required for jsonl")
+    if dataset.get("backend") in ("huggingface", "jsonl"):
+        required_fields = ("source_lang", "target_lang")
+        for field in required_fields:
+            if not dataset.get(field):
+                raise ValueError(f"dataset.{field} must be set")
     if dataset.get("backend") == "huggingface":
         for field in ("name", "subset", "source_lang", "target_lang"):
             if not dataset.get(field):
