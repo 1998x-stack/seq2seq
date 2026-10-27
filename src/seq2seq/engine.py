@@ -5,9 +5,9 @@ import os
 import platform
 import random
 import time
+from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from collections.abc import Callable
 from typing import Any
 
 import torch
