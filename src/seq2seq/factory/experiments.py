@@ -20,6 +20,8 @@ def _set_nested(cfg: dict, path: str, value: Any) -> None:
         raise ValueError(f"Use dotted section.key path: {path}")
     node = cfg
     for key in parts[:-1]:
+        if key == "decoding" and key not in node:
+            node[key] = {}
         if key not in node or not isinstance(node[key], dict):
             raise ValueError(f"Unknown configuration section: {path}")
         node = node[key]

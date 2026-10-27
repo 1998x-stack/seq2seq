@@ -20,13 +20,13 @@ class Registry(Generic[T]):
             raise ValueError(f"Duplicate or invalid {self.category}: {name}")
         self._items[key] = constructor
 
-    def create(self, name: str, **kwargs: Any) -> T:
+    def create(self, name: str, *args: Any, **kwargs: Any) -> T:
         key = name.strip().lower()
         if key not in self._items:
             raise ValueError(
                 f"Unknown {self.category} '{name}'. Choices: {', '.join(self.names())}"
             )
-        return self._items[key](**kwargs)
+        return self._items[key](*args, **kwargs)
 
     def names(self) -> tuple[str, ...]:
         return tuple(sorted(self._items))

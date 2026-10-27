@@ -187,12 +187,13 @@ def make_loader(bundle: DataBundle, split: str, cfg: dict, shuffle: bool = False
         getattr(bundle, split), bundle.tokenizer, bundle.src_vocab, bundle.tgt_vocab,
         reverse_source=bool(cfg["model"].get("reverse_source", False)),
     )
-    return DataLoader(
-        ds,
-        batch_size=int(cfg["training"]["batch_size"]),
-        shuffle=shuffle,
-        num_workers=int(cfg["training"].get("num_workers", 0)),
-        collate_fn=partial(
-            collate_pairs, src_pad=bundle.src_vocab.pad_id, tgt_pad=bundle.tgt_vocab.pad_id
+    from seq2seq.factory.batching import DataLoaderFactory
+
+    return DataLoaderFactory.create(
+        ds, cfg,
+        partial(
+            collate_pairs, src_pad=bundle.src_vocab.pad_id,
+            tgt_pad=bundle.tgt_vocab.pad_id,
         ),
+        shuffle=shuffle,
     )
