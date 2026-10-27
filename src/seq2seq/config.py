@@ -10,7 +10,7 @@ def load_config(path: str | Path) -> dict[str, Any]:
     with Path(path).open(encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
     if not isinstance(config, dict):
-        raise ValueError("Config must be a YAML mapping")
+        raise TypeError("Config must be a YAML mapping")
     validate_config(config)
     return config
 
@@ -18,7 +18,7 @@ def load_config(path: str | Path) -> dict[str, Any]:
 def validate_config(cfg: dict[str, Any]) -> None:
     for name in ("dataset", "tokenizer", "model", "training"):
         if not isinstance(cfg.get(name), dict):
-            raise ValueError(f"Missing configuration section: {name}")
+            raise TypeError(f"Missing configuration section: {name}")
     dataset, model, training = cfg["dataset"], cfg["model"], cfg["training"]
     if model.get("cell") not in ("rnn", "lstm"):
         raise ValueError("model.cell must be 'rnn' or 'lstm'")

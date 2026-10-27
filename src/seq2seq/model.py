@@ -42,7 +42,7 @@ class AdditiveAttention(nn.Module):
     def forward(
         self, query: torch.Tensor, memory: torch.Tensor, mask: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        batch, length, _ = memory.shape
+        _batch, length, _ = memory.shape
         combined = torch.cat([query.unsqueeze(1).expand(-1, length, -1), memory], dim=-1)
         energies = self.vector(torch.tanh(self.score(combined))).squeeze(-1)
         weights = torch.softmax(energies.masked_fill(~mask, -1e9), dim=-1)
@@ -88,11 +88,11 @@ class Seq2Seq(nn.Module):
                  src_pad: int = 0, tgt_pad: int = 0) -> None:
         super().__init__()
         hidden = int(cfg["hidden_dim"])
-        common = dict(
-            embedding_dim=int(cfg["embedding_dim"]), hidden_dim=hidden,
-            layers=int(cfg["num_layers"]), dropout=float(cfg.get("dropout", 0)),
-            cell=cfg["cell"],
-        )
+        common = {
+            "embedding_dim": int(cfg["embedding_dim"]), "hidden_dim": hidden,
+            "layers": int(cfg["num_layers"]), "dropout": float(cfg.get("dropout", 0)),
+            "cell": cfg["cell"],
+        }
         self.encoder = Encoder(src_vocab_size, pad_id=src_pad, **common)
         self.decoder = Decoder(
             tgt_vocab_size, pad_id=tgt_pad, attention=bool(cfg.get("attention", False)),

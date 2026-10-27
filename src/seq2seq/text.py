@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections import Counter
 import re
+from collections import Counter
 
 PAD, UNK, BOS, EOS = "<pad>", "<unk>", "<bos>", "<eos>"
 SPECIALS = (PAD, UNK, BOS, EOS)
@@ -33,7 +33,7 @@ class Vocabulary:
     @classmethod
     def build(
         cls, sentences: list[list[str]], max_size: int, min_freq: int = 1
-    ) -> "Vocabulary":
+    ) -> Vocabulary:
         if max_size < len(SPECIALS):
             raise ValueError("max_size must be at least four")
         count = Counter(token for sentence in sentences for token in sentence if token not in SPECIALS)

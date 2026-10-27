@@ -4,8 +4,8 @@ import argparse
 import json
 
 from seq2seq.config import load_config
-from seq2seq.engine import evaluate, train, translate
 from seq2seq.data import prepare_data
+from seq2seq.engine import evaluate, train, translate
 
 
 def main() -> None:
