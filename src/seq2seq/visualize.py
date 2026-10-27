@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import html
 import json
-from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
