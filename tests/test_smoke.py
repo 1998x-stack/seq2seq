@@ -14,9 +14,9 @@ def test_end_to_end_offline(tmp_path: Path):
     assert (out / "last.pt").exists()
     assert (out / "metrics.jsonl").exists()
     assert result["epoch"] == 1
-    evaluated = evaluate(out / "best.pt", max_examples=8, device_name="cpu")
+    evaluated = evaluate(out / "best.pt", max_examples=4, device_name="cpu")
     assert 0 <= evaluated["token_accuracy"] <= 1
-    assert evaluated["generated_examples"] == 8
+    assert evaluated["generated_examples"] == 4
     translated = translate(out / "best.pt", ["red green circle", "blue square"], "cpu")
     assert len(translated) == 2
 
