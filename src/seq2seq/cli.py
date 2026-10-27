@@ -6,6 +6,7 @@ import json
 from seq2seq.config import load_config
 from seq2seq.data import prepare_data
 from seq2seq.engine import evaluate, train, translate
+from seq2seq.experiments import make_plan, run_matrix, summarize
 
 
 def main() -> None:
@@ -24,10 +25,21 @@ def main() -> None:
     eval_cmd.add_argument("--split", choices=["train", "validation", "test"], default="test")
     eval_cmd.add_argument("--max-examples", type=int, default=200)
     eval_cmd.add_argument("--device", default="auto")
+    eval_cmd.add_argument("--predictions", default=None,
+                          help="Optional JSONL path for generated predictions")
     infer_cmd = sub.add_parser("translate", help="Generate translations")
     infer_cmd.add_argument("--checkpoint", required=True)
     infer_cmd.add_argument("--text", action="append", required=True)
     infer_cmd.add_argument("--device", default="auto")
+    experiment = sub.add_parser("experiments", help="Plan/run/summarize six ablations")
+    experiment.add_argument("action", choices=["plan", "run", "summarize"])
+    experiment.add_argument("--config", "-c", default="configs/opus_books_lstm.yaml")
+    experiment.add_argument("--output", default="runs/stage02")
+    experiment.add_argument("--seeds", type=int, nargs="+", default=[42, 43, 44])
+    experiment.add_argument("--split-seed", type=int, default=2026)
+    experiment.add_argument("--max-examples", type=int, default=200)
+    experiment.add_argument("--limit", type=int, default=None,
+                            help="Run only the first N matrix entries (CI smoke)")
     args = parser.parse_args()
 
     if args.command == "train":
@@ -43,9 +55,23 @@ def main() -> None:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     elif args.command == "evaluate":
         print(json.dumps(
-            evaluate(args.checkpoint, args.split, args.max_examples, args.device),
+            evaluate(args.checkpoint, args.split, args.max_examples, args.device, args.predictions),
             indent=2, ensure_ascii=False,
         ))
+    elif args.command == "experiments":
+        if args.action == "plan":
+            plan = make_plan(load_config(args.config), args.seeds, args.split_seed)
+            for item in plan:
+                item.pop("config")
+            print(json.dumps(plan, indent=2, ensure_ascii=False))
+        elif args.action == "run":
+            run_matrix(
+                args.config, args.output, args.seeds, args.split_seed,
+                args.max_examples, args.limit,
+            )
+            print(json.dumps(summarize(args.output), indent=2, ensure_ascii=False))
+        else:
+            print(json.dumps(summarize(args.output), indent=2, ensure_ascii=False))
     elif args.command == "translate":
         for src, tgt in zip(args.text, translate(args.checkpoint, args.text, args.device)):
             print(json.dumps({"source": src, "prediction": tgt}, ensure_ascii=False))

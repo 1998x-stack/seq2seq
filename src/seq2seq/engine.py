@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import random
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,7 @@ from torch.nn import functional as F
 
 from seq2seq.config import validate_config
 from seq2seq.data import DataBundle, make_loader, prepare_data
+from seq2seq.diagnostics import export_jsonl, summarize_predictions
 from seq2seq.losses import masked_cross_entropy, perplexity
 from seq2seq.model import Seq2Seq, build_model
 
@@ -86,19 +89,21 @@ def run_epoch(
 @torch.inference_mode()
 def generation_metrics(
     model: Seq2Seq, bundle: DataBundle, cfg: dict, split: str,
-    device: torch.device, max_examples: int = 200
+    device: torch.device, max_examples: int = 200,
+    predictions_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    import sacrebleu
-
     if split not in ("validation", "test", "train"):
         raise ValueError(f"Unknown data split: {split}")
-    if max_examples < 0:
-        raise ValueError("max_examples must be nonnegative")
+    if max_examples < -1:
+        raise ValueError("max_examples must be -1 (all), 0 (skip), or positive")
     if max_examples == 0:
-        return {"bleu": None, "exact_match": None, "generated_examples": 0, "examples": []}
+        return summarize_predictions([])
+
+    references = getattr(bundle, split)
     loader = make_loader(bundle, split, cfg, shuffle=False)
+    tokenizer = bundle.tokenizer
     model.eval()
-    hypotheses, references, samples = [], [], []
+    rows: list[dict[str, Any]] = []
     for batch in loader:
         data = to_device(batch, device)
         output = model.generate(
@@ -106,23 +111,29 @@ def generation_metrics(
             bos_id=bundle.tgt_vocab.bos_id, eos_id=bundle.tgt_vocab.eos_id,
             max_new_tokens=int(cfg["training"]["max_new_tokens"]),
         )
-        for prediction, gold in zip(output.tolist(), batch["tgt_out"].tolist()):
-            hyp = bundle.tokenizer.detokenize(bundle.tgt_vocab.decode(prediction))
-            ref = bundle.tokenizer.detokenize(bundle.tgt_vocab.decode(gold))
-            hypotheses.append(hyp)
-            references.append(ref)
-            if len(samples) < 5:
-                samples.append({"reference": ref, "prediction": hyp})
-            if len(hypotheses) >= max_examples:
+        for prediction in output.tolist():
+            index = len(rows)
+            src_raw, ref_raw = references[index]
+            src_tokens = tokenizer.tokenize(src_raw)
+            tgt_tokens = tokenizer.tokenize(ref_raw)
+            hyp = tokenizer.detokenize(bundle.tgt_vocab.decode(prediction))
+            # Do not decode reference ids: unknown gold words would become <unk>.
+            ref = tokenizer.detokenize(tgt_tokens)
+            src_unk = sum(token not in bundle.src_vocab.stoi for token in src_tokens)
+            tgt_unk = sum(token not in bundle.tgt_vocab.stoi for token in tgt_tokens)
+            rows.append({
+                "index": index, "source": src_raw, "reference": ref,
+                "prediction": hyp, "exact_match": hyp == ref,
+                "source_length": len(src_tokens), "target_length": len(tgt_tokens),
+                "source_oov_count": src_unk, "target_oov_count": tgt_unk,
+            })
+            if max_examples > 0 and len(rows) >= max_examples:
                 break
-        if len(hypotheses) >= max_examples:
+        if max_examples > 0 and len(rows) >= max_examples:
             break
-    bleu = sacrebleu.corpus_bleu(hypotheses, [references]).score
-    exact = sum(hyp == ref for hyp, ref in zip(hypotheses, references)) / len(hypotheses)
-    return {
-        "bleu": bleu, "exact_match": exact,
-        "generated_examples": len(hypotheses), "examples": samples,
-    }
+    if predictions_path is not None:
+        export_jsonl(predictions_path, rows)
+    return summarize_predictions(rows)
 
 
 def _vocab_payload(bundle: DataBundle) -> dict[str, list[str]]:
@@ -145,6 +156,8 @@ def save_checkpoint(
             "epoch": epoch,
             "best_nll": best_nll,
             "torch_rng": torch.get_rng_state(),
+            "python_rng": random.getstate(),
+            "cuda_rng": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
         },
         temporary,
     )
@@ -196,14 +209,34 @@ def train(
         start_epoch = int(prior["epoch"]) + 1
         best_nll = float(prior["best_nll"])
         torch.set_rng_state(prior["torch_rng"].cpu())
+        if "python_rng" in prior:
+            random.setstate(prior["python_rng"])
+        if prior.get("cuda_rng") is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(prior["cuda_rng"])
 
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     (output / "config.yaml").write_text(
         yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8"
     )
+    def pkgver(package: str) -> str | None:
+        try:
+            return version(package)
+        except PackageNotFoundError:
+            return None
+
     metadata = {
-        "seed": seed, "device": str(device), "data_fingerprint": bundle.fingerprint,
+        "seed": seed,
+        "split_info": bundle.split_info,
+        "dataset": cfg["dataset"],
+        "environment": {
+            "python": platform.python_version(), "platform": platform.platform(),
+            "torch": torch.__version__, "datasets": pkgver("datasets"),
+            "sacrebleu": pkgver("sacrebleu"),
+            "cuda_available": torch.cuda.is_available(),
+            "cuda_version": torch.version.cuda,
+            "gpu": torch.cuda.get_device_name(device) if device.type == "cuda" else None,
+        }, "device": str(device), "data_fingerprint": bundle.fingerprint,
         "train_pairs": len(bundle.train), "validation_pairs": len(bundle.validation),
         "test_pairs": len(bundle.test), "src_vocab": len(bundle.src_vocab),
         "tgt_vocab": len(bundle.tgt_vocab),
@@ -236,7 +269,7 @@ def train(
 
 def evaluate(
     checkpoint_path: str | Path, split: str = "test", max_examples: int = 200,
-    device_name: str = "auto"
+    device_name: str = "auto", predictions_path: str | Path | None = None
 ) -> dict[str, Any]:
     device = choose_device(device_name)
     model, checkpoint = restore_model(checkpoint_path, device)
@@ -246,7 +279,9 @@ def evaluate(
         raise ValueError("Dataset fingerprint mismatch: evaluation aborted")
     loader = make_loader(bundle, split, cfg)
     result = run_epoch(model, loader, device, cfg)
-    result.update(generation_metrics(model, bundle, cfg, split, device, max_examples))
+    result.update(generation_metrics(
+        model, bundle, cfg, split, device, max_examples, predictions_path
+    ))
     result["split"] = split
     result["checkpoint"] = str(checkpoint_path)
     return result

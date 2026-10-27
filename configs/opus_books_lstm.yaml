@@ -2,11 +2,13 @@
 seed: 42
 dataset:
   backend: huggingface
+  split_seed: 42
+  split_strategy: random
   name: Helsinki-NLP/opus_books
   subset: en-fr
   split: train
   # Pin to a Hub commit for exact cross-machine reproducibility.
-  revision: null
+  revision: 1f9f619
   source_lang: en
   target_lang: fr
   max_samples: 30000  # Set 0 for all eligible data

@@ -4,6 +4,7 @@ import hashlib
 import json
 import random
 from dataclasses import dataclass
+from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -20,6 +21,7 @@ class DataBundle:
     tgt_vocab: Vocabulary
     tokenizer: Tokenizer
     fingerprint: str
+    split_info: dict
 
 
 def _toy_pairs(seed: int, count: int) -> list[tuple[str, str]]:
@@ -33,10 +35,22 @@ def _toy_pairs(seed: int, count: int) -> list[tuple[str, str]]:
 
 def prepare_data(cfg: dict, vocab_data: dict | None = None) -> DataBundle:
     dc, tc = cfg["dataset"], cfg["tokenizer"]
-    seed = int(cfg.get("seed", 42))
+    seed = int(dc.get("split_seed", cfg.get("seed", 42)))
     tokenizer = Tokenizer(lowercase=bool(tc.get("lowercase", True)))
     if dc["backend"] == "toy":
         pairs = _toy_pairs(seed, int(dc.get("toy_samples", 1200)))
+        group_ids = [None] * len(pairs)
+    elif dc["backend"] == "jsonl":
+        source, target = dc["source_lang"], dc["target_lang"]
+        pairs, group_ids = [], []
+        with Path(dc["path"]).open(encoding="utf-8") as handle:
+            for line_no, line in enumerate(handle, 1):
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                translation = row.get("translation", row)
+                pairs.append((translation[source], translation[target]))
+                group_ids.append(row.get(dc.get("group_field", "group_id")))
     else:
         # Import lazily so the offline toy and unit tests do not need network access.
         from datasets import load_dataset
@@ -45,11 +59,13 @@ def prepare_data(cfg: dict, vocab_data: dict | None = None) -> DataBundle:
         rows = load_dataset(dc["name"], dc["subset"], split=dc.get("split", "train"), **kw)
         source, target = dc["source_lang"], dc["target_lang"]
         pairs = [(row["translation"][source], row["translation"][target]) for row in rows]
+        group_ids = [row.get(dc.get("group_field", "group_id")) for row in rows]
 
     min_len, max_len = int(dc.get("min_length", 1)), int(dc["max_length"])
     clean = []
+    clean_groups = []
     seen = set()
-    for src, tgt in pairs:
+    for (src, tgt), group in zip(pairs, group_ids):
         if not isinstance(src, str) or not isinstance(tgt, str):
             continue
         a, b = tokenizer.tokenize(src), tokenizer.tokenize(tgt)
@@ -60,18 +76,50 @@ def prepare_data(cfg: dict, vocab_data: dict | None = None) -> DataBundle:
             continue
         seen.add((s, t))
         clean.append((src.strip(), tgt.strip()))
+        clean_groups.append(group)
 
     rng = random.Random(seed)
-    rng.shuffle(clean)
+    joined = list(zip(clean, clean_groups))
+    rng.shuffle(joined)
     if int(dc.get("max_samples", 0)):
-        clean = clean[: int(dc["max_samples"])]
-    if len(clean) < 10:
+        joined = joined[: int(dc["max_samples"])]
+    if len(joined) < 10:
         raise ValueError("At least 10 valid unique sequence pairs are required")
-    nv = max(1, round(len(clean) * float(dc.get("validation_fraction", 0.05))))
-    nt = max(1, round(len(clean) * float(dc.get("test_fraction", 0.05))))
-    if nv + nt >= len(clean):
-        raise ValueError("No training examples remain after splitting")
-    test, validation, train = clean[:nt], clean[nt : nt + nv], clean[nt + nv :]
+    strategy = dc.get("split_strategy", "random")
+    if strategy == "group":
+        if any(group is None or str(group).strip() == "" for _, group in joined):
+            raise ValueError("group split requires nonempty group_field for every row; "
+                             "OPUS Books has no book_id, and its row id is not a document ID")
+        grouped = {}
+        for pair, group in joined:
+            grouped.setdefault(str(group), []).append(pair)
+        keys = list(grouped)
+        rng.shuffle(keys)
+        if len(keys) < 3:
+            raise ValueError("group split requires at least three distinct groups")
+        nt = max(1, round(len(keys) * float(dc.get("test_fraction", 0.05))))
+        nv = max(1, round(len(keys) * float(dc.get("validation_fraction", 0.05))))
+        if nt + nv >= len(keys):
+            raise ValueError("No train groups remain")
+        test_keys = keys[:nt]
+        val_keys = keys[nt:nt+nv]
+        train_keys = keys[nt+nv:]
+        test = [pair for k in test_keys for pair in grouped[k]]
+        validation = [pair for k in val_keys for pair in grouped[k]]
+        train = [pair for k in train_keys for pair in grouped[k]]
+        split_info = {
+            "strategy": "group", "split_seed": seed,
+            "groups": {"train": len(train_keys), "validation": len(val_keys), "test": len(test_keys)},
+            "group_overlap": 0,
+        }
+    else:
+        clean = [pair for pair, _ in joined]
+        nv = max(1, round(len(clean) * float(dc.get("validation_fraction", 0.05))))
+        nt = max(1, round(len(clean) * float(dc.get("test_fraction", 0.05))))
+        if nv + nt >= len(clean):
+            raise ValueError("No training examples remain after splitting")
+        test, validation, train = clean[:nt], clean[nt:nt+nv], clean[nt+nv:]
+        split_info = {"strategy": "random", "split_seed": seed, "group_overlap": None}
 
     if vocab_data is None:
         src_vocab = Vocabulary.build(
@@ -88,9 +136,12 @@ def prepare_data(cfg: dict, vocab_data: dict | None = None) -> DataBundle:
         src_vocab = Vocabulary(vocab_data["src"])
         tgt_vocab = Vocabulary(vocab_data["tgt"])
     fingerprint = hashlib.sha256(
-        json.dumps(clean, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        json.dumps(
+            {"train": train, "validation": validation, "test": test, "split_info": split_info},
+            ensure_ascii=False, separators=(",", ":"),
+        ).encode("utf-8")
     ).hexdigest()
-    return DataBundle(train, validation, test, src_vocab, tgt_vocab, tokenizer, fingerprint)
+    return DataBundle(train, validation, test, src_vocab, tgt_vocab, tokenizer, fingerprint, split_info)
 
 
 class PairDataset(Dataset):

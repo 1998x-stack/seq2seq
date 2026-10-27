@@ -1,0 +1,38 @@
+# Example ONLY: dataset must include real book_id; OPUS Books does not provide one.
+seed: 42
+dataset:
+  backend: jsonl
+  path: data/en_fr_with_book_ids.jsonl
+  source_lang: en
+  target_lang: fr
+  group_field: book_id
+  split_strategy: group
+  split_seed: 2026
+  max_samples: 0
+  min_length: 1
+  max_length: 40
+  validation_fraction: 0.1
+  test_fraction: 0.1
+tokenizer:
+  lowercase: true
+  vocab_size: 12000
+  min_freq: 2
+model:
+  cell: lstm
+  embedding_dim: 256
+  hidden_dim: 384
+  num_layers: 2
+  dropout: 0.2
+  attention: true
+  reverse_source: false
+training:
+  device: auto
+  epochs: 12
+  batch_size: 64
+  num_workers: 0
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  grad_clip: 1.0
+  teacher_forcing: 1.0
+  label_smoothing: 0.0
+  max_new_tokens: 50

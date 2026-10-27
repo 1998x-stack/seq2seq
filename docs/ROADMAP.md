@@ -19,15 +19,17 @@ Acceptance: install package; offline tests and smoke train/evaluate/translate ex
 
 Acceptance: all 4 combinations of RNN/LSTM × attention pass forward/backward/generation tests.
 
-## Stage 02 — scientific evaluation (next)
+## Stage 02 — scientific evaluation (in progress)
 
-- [ ] Pin corpus revision; archive dependency locks and runtime metadata.
-- [ ] Run six controlled ablations on identical en-fr split and fixed training budget.
-- [ ] Compare at least three random seeds and report mean and dispersion.
-- [ ] Length-bucket analysis, OOV breakdown, representative errors.
-- [ ] Document- or book-disjoint test set and an external translation test set.
-- [ ] Add BLEU signature and hypothesis/reference predictions as research artifacts.
-- [ ] Resume tests (multi-epoch exact continuation where supported).
+- [x] Pin OPUS Books dataset revision (abbreviated upstream commit) and record runtime metadata; full dependency lockfile pending.
+- [x] Implement six-condition matrix runner on a fixed data split; real en-fr training and measured ablations pending.
+- [x] Implement seed-controlled repeated runs and mean/sample-standard-deviation reports; full measured runs pending.
+- [x] Implement per-example prediction exports, length buckets and OOV analysis; scientific interpretation pending.
+- [x] Support genuinely group-disjoint split when JSONL contains book_id; curated external/book-disjoint corpus pending.
+- [x] Store SacreBLEU signature and raw-normalized reference predictions in JSONL.
+- [ ] Verify exact multi-epoch resume and introduce multi-worker deterministic shuffling safeguards.
+
+Acceptance: offline tests/CI pass, then execute all 18 real corpus runs, compare data fingerprints, and preserve a source-backed evaluation report. Do not call Stage 02 scientifically complete until genuine results exist.
 
 ## Stage 03 — advanced decoding and training
 
