@@ -15,6 +15,17 @@ Switch between vanilla RNN and LSTM through YAML; optionally enable Bahdanau-sty
 - Trusted local checkpoints (model + optimizer + vocabulary + configuration).
 - Offline toy copy task, pytest, Ruff and GitHub Actions.
 
+## Ablation branch: training telemetry and offline dashboard
+
+On this branch, every training run records UTC JSONL events and epoch-level CSV metrics; optional TensorBoard and offline interactive Plotly visualization are supported.
+
+    git switch ablation
+    pip install -e ".[dev]"
+    seq2seq experiments run -c configs/smoke.yaml --output runs/ablation-smoke --seeds 42 --split-seed 2026 --max-examples 4 --limit 1 --dashboard
+    seq2seq visualize --root runs/ablation-smoke
+
+The generated HTML is self-contained and uses only real recorded metrics. The above offline toy example is for checking the pipeline, not for claiming translation quality. Full Hugging Face experiments still require training. See [docs/ablation.md](docs/ablation.md) for the logging contract, metric definitions, TensorBoard instructions and six-model comparison procedure.
+
 ## Quick start
 
 Python 3.11+ recommended. Install PyTorch for your device as directed by pytorch.org and then install this package.
