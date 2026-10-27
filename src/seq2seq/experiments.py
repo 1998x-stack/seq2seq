@@ -17,7 +17,6 @@ import yaml
 from seq2seq.config import load_config
 from seq2seq.engine import evaluate, train
 
-
 BASELINES: tuple[tuple[str, bool, bool], ...] = (
     ("rnn", False, False),
     ("rnn", False, True),

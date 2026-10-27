@@ -52,7 +52,8 @@ def test_group_disjoint_jsonl(tmp_path: Path):
         "validation_fraction": 0.2, "test_fraction": 0.2,
     })
     b = prepare_data(c)
-    groups = lambda pairs: {s.split()[1] for s, _ in pairs}
+    def groups(pairs):
+        return {s.split()[1] for s, _ in pairs}
     assert not (groups(b.train) & groups(b.test))
     assert not (groups(b.train) & groups(b.validation))
     assert not (groups(b.test) & groups(b.validation))
