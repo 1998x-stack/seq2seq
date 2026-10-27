@@ -1,0 +1,33 @@
+# Offline copy task: no Hugging Face download
+seed: 42
+dataset:
+  backend: toy
+  toy_samples: 96
+  max_samples: 64
+  min_length: 1
+  max_length: 12
+  validation_fraction: 0.1
+  test_fraction: 0.1
+tokenizer:
+  lowercase: true
+  vocab_size: 100
+  min_freq: 1
+model:
+  cell: lstm
+  embedding_dim: 16
+  hidden_dim: 24
+  num_layers: 1
+  dropout: 0.0
+  attention: true
+  reverse_source: false
+training:
+  device: cpu
+  epochs: 1
+  batch_size: 16
+  num_workers: 0
+  learning_rate: 0.005
+  weight_decay: 0.0
+  grad_clip: 1.0
+  teacher_forcing: 1.0
+  label_smoothing: 0.0
+  max_new_tokens: 15
