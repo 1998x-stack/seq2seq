@@ -1,0 +1,65 @@
+# Paper 2014 3.4 architecture/hyperparameters ONLY.
+# CAUTION: original around 384M params and large memory on 8 GPUs.
+# This uses OPUS Books, 8 epochs; NOT original WMT14 12M data, exact
+# 7.5-epoch schedule, C++ kernels, or 2014 tokenized cased BLEU protocol.
+seed: 42
+dataset:
+  backend: huggingface
+  name: Helsinki-NLP/opus_books
+  subset: en-fr
+  revision: 1f9f619
+  split: train
+  source_lang: en
+  target_lang: fr
+  split_seed: 2026
+  split_strategy: random
+  max_samples: 0
+  min_length: 1
+  max_length: 120
+  validation_fraction: 0.05
+  test_fraction: 0.05
+tokenizer:
+  lowercase: false
+  src_vocab_size: 160000
+  tgt_vocab_size: 80000
+  min_freq: 1
+model:
+  architecture: encoder_decoder
+  cell: lstm
+  embedding_dim: 1000
+  hidden_dim: 1000
+  num_layers: 4
+  dropout: 0.0
+  attention: false
+  reverse_source: true
+  initialization: uniform
+  init_range: 0.08
+training:
+  device: auto
+  epochs: 8
+  batch_size: 128
+  num_workers: 0
+  learning_rate: 0.7
+  optimizer: sgd
+  momentum: 0.0
+  weight_decay: 0.0
+  loss: sequence_nll
+  scheduler:
+    name: paper_halving
+    begin_epoch: 5.0
+    interval_epochs: 0.5
+    gamma: 0.5
+  batching: length_bucket
+  pool_multiplier: 50
+  grad_clip: 5.0
+  teacher_forcing: 1.0
+  label_smoothing: 0.0
+  max_new_tokens: 120
+decoding:
+  strategy: beam
+  beam_size: 12
+  length_penalty: 0.0
+logging:
+  enabled: true
+  log_every_steps: 50
+  tensorboard: false

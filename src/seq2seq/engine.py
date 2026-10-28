@@ -4,6 +4,8 @@ import json
 import os
 import platform
 import random
+import time
+from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
@@ -15,8 +17,15 @@ from torch.nn import functional as F
 from seq2seq.config import validate_config
 from seq2seq.data import DataBundle, make_loader, prepare_data
 from seq2seq.diagnostics import export_jsonl, summarize_predictions
-from seq2seq.losses import masked_cross_entropy, perplexity
+from seq2seq.factory.components import (
+    DecoderFactory,
+    LossFactory,
+    OptimizerFactory,
+    SchedulerFactory,
+)
+from seq2seq.losses import perplexity
 from seq2seq.model import Seq2Seq, build_model
+from seq2seq.telemetry import RunLogger, export_metrics_csv
 
 
 def set_seed(seed: int) -> None:
@@ -41,12 +50,18 @@ def to_device(batch: dict[str, torch.Tensor], device: torch.device) -> dict[str,
 
 def run_epoch(
     model: Seq2Seq, loader: Any, device: torch.device, cfg: dict,
-    optimizer: torch.optim.Optimizer | None = None
+    optimizer: torch.optim.Optimizer | None = None,
+    on_step: Callable[[dict[str, Any]], None] | None = None,
+    epoch_index: int = 0,
 ) -> dict[str, float]:
     training = optimizer is not None
     model.train(training)
     sum_nll, correct, tokens = 0.0, 0, 0
-    for batch in loader:
+    started = time.perf_counter()
+    objective_sum, examples = 0.0, 0
+    for step, batch in enumerate(loader, 1):
+        if training:
+            SchedulerFactory.step(optimizer, cfg, epoch_index + (step - 1) / len(loader))
         batch = to_device(batch, device)
         if training:
             optimizer.zero_grad(set_to_none=True)
@@ -55,16 +70,27 @@ def run_epoch(
                 batch["src"], batch["src_lengths"], batch["tgt_in"],
                 teacher_forcing=float(cfg["training"].get("teacher_forcing", 1.0)) if training else 1.0,
             )
-            loss, count = masked_cross_entropy(
-                logits, batch["tgt_out"], pad_id=model.tgt_pad,
-                label_smoothing=float(cfg["training"].get("label_smoothing", 0.0)) if training else 0.0,
-            )
+            if training:
+                objective = LossFactory.create(cfg, pad_id=model.tgt_pad)
+            else:
+                objective = LossFactory.create(
+                    {"training": {"loss": "token_ce", "label_smoothing": 0.0}},
+                    pad_id=model.tgt_pad,
+                )
+            loss, count = objective(logits, batch["tgt_out"])
             if training:
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(
+                grad_norm = torch.nn.utils.clip_grad_norm_(
                     model.parameters(), float(cfg["training"].get("grad_clip", 1.0))
                 )
                 optimizer.step()
+                if on_step is not None:
+                    on_step({
+                        "step": step, "batch_tokens": count,
+                        "batch_loss": float(loss.detach().item()),
+                        "grad_norm": float(grad_norm.item()),
+                        "elapsed_seconds": time.perf_counter() - started,
+                    })
         with torch.no_grad():
             nll = F.cross_entropy(
                 logits.detach().reshape(-1, logits.size(-1)),
@@ -75,10 +101,20 @@ def run_epoch(
             correct += int(((logits.argmax(-1) == batch["tgt_out"]) & mask).sum().item())
             sum_nll += float(nll.item())
             tokens += count
+            if cfg["training"].get("loss", "token_ce") == "sequence_nll" and training:
+                objective_sum += float(loss.detach().item()) * batch["src"].size(0)
+                examples += batch["src"].size(0)
+            else:
+                objective_sum += float(loss.detach().item()) * count
+                examples += count
     if tokens == 0:
         raise ValueError("Empty dataloader")
     mean_nll = sum_nll / tokens
+    elapsed = time.perf_counter() - started
     return {
+        "objective_loss": objective_sum / max(1, examples),
+        "elapsed_seconds": elapsed,
+        "tokens_per_second": tokens / max(elapsed, 1e-12),
         "nll": mean_nll,
         "perplexity": perplexity(mean_nll),
         "token_accuracy": correct / tokens,
@@ -106,8 +142,8 @@ def generation_metrics(
     rows: list[dict[str, Any]] = []
     for batch in loader:
         data = to_device(batch, device)
-        output = model.generate(
-            data["src"], data["src_lengths"],
+        output = DecoderFactory.create(cfg)(
+            model, data["src"], data["src_lengths"],
             bos_id=bundle.tgt_vocab.bos_id, eos_id=bundle.tgt_vocab.eos_id,
             max_new_tokens=int(cfg["training"]["max_new_tokens"]),
         )
@@ -198,10 +234,7 @@ def train(
     train_loader = make_loader(bundle, "train", cfg, shuffle=True)
     val_loader = make_loader(bundle, "validation", cfg)
     model = build_model(cfg, len(bundle.src_vocab), len(bundle.tgt_vocab)).to(device)
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=float(cfg["training"]["learning_rate"]),
-        weight_decay=float(cfg["training"].get("weight_decay", 0.0)),
-    )
+    optimizer = OptimizerFactory.create(model.parameters(), cfg)
     start_epoch, best_nll = 1, float("inf")
     if prior is not None:
         model.load_state_dict(prior["model"])
@@ -248,20 +281,87 @@ def train(
     print(json.dumps(metadata, ensure_ascii=False), flush=True)
 
     latest: dict[str, Any] = {}
-    for epoch in range(start_epoch, int(cfg["training"]["epochs"]) + 1):
-        train_metrics = run_epoch(model, train_loader, device, cfg, optimizer)
-        val_metrics = run_epoch(model, val_loader, device, cfg)
-        row = {"epoch": epoch, "train": train_metrics, "validation": val_metrics}
-        is_best = val_metrics["nll"] < best_nll
-        if is_best:
-            best_nll = val_metrics["nll"]
-        save_checkpoint(output / "last.pt", model, optimizer, cfg, bundle, epoch, best_nll)
-        if is_best:
-            save_checkpoint(output / "best.pt", model, optimizer, cfg, bundle, epoch, best_nll)
-        with (output / "metrics.jsonl").open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
-        print(json.dumps(row, ensure_ascii=False), flush=True)
-        latest = row
+    logging_cfg = cfg.get("logging", {})
+    log_every = int(logging_cfg.get("log_every_steps", 20))
+    enabled = bool(logging_cfg.get("enabled", True))
+    with RunLogger(
+        output, name=output.name,
+        tensorboard=bool(logging_cfg.get("tensorboard", False)) if enabled else False,
+        console=enabled,
+    ) as logger:
+        if enabled:
+            logger.emit(
+                "training_started", seed=seed, epochs=int(cfg["training"]["epochs"]),
+                starting_epoch=start_epoch, device=str(device),
+                data_fingerprint=bundle.fingerprint, parameters=metadata["parameters"],
+            )
+        try:
+            for epoch in range(start_epoch, int(cfg["training"]["epochs"]) + 1):
+                if hasattr(train_loader.batch_sampler, "set_epoch"):
+                    train_loader.batch_sampler.set_epoch(epoch - 1)
+                if enabled:
+                    logger.emit("epoch_started", epoch=epoch)
+                def step_event(values: dict[str, Any], current_epoch: int = epoch) -> None:
+                    if not enabled or log_every <= 0:
+                        return
+                    if values["step"] % log_every != 0:
+                        return
+                    global_step = (current_epoch - 1) * len(train_loader) + values["step"]
+                    logger.emit("train_step", epoch=current_epoch, global_step=global_step, **values)
+                    logger.scalar("train/batch_loss", values["batch_loss"], global_step)
+                    logger.scalar("train/grad_norm", values["grad_norm"], global_step)
+
+                train_metrics = run_epoch(
+                    model, train_loader, device, cfg, optimizer, on_step=step_event,
+                    epoch_index=epoch - 1,
+                )
+                val_metrics = run_epoch(model, val_loader, device, cfg)
+                is_best = val_metrics["nll"] < best_nll
+                if is_best:
+                    best_nll = val_metrics["nll"]
+                lr = float(optimizer.param_groups[0]["lr"])
+                row = {
+                    "epoch": epoch, "train": train_metrics, "validation": val_metrics,
+                    "learning_rate": lr, "best_validation_nll": best_nll,
+                }
+                save_checkpoint(
+                    output / "last.pt", model, optimizer, cfg, bundle, epoch, best_nll
+                )
+                if is_best:
+                    save_checkpoint(
+                        output / "best.pt", model, optimizer, cfg, bundle, epoch, best_nll
+                    )
+                # Append one epoch only. Detect duplicate records on resume.
+                existing_epochs = set()
+                metrics_path = output / "metrics.jsonl"
+                if metrics_path.exists():
+                    existing_epochs = {
+                        int(json.loads(line)["epoch"])
+                        for line in metrics_path.read_text(encoding="utf-8").splitlines()
+                        if line.strip()
+                    }
+                if epoch in existing_epochs:
+                    raise ValueError(f"metrics.jsonl already contains epoch {epoch}")
+                with metrics_path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+                export_metrics_csv(output)
+                if enabled:
+                    logger.emit("epoch_completed", epoch=epoch, best=is_best,
+                                train=train_metrics, validation=val_metrics,
+                                learning_rate=lr, best_validation_nll=best_nll)
+                    for split, metrics in (("train", train_metrics), ("validation", val_metrics)):
+                        for name in ("nll", "perplexity", "token_accuracy", "tokens_per_second"):
+                            logger.scalar(f"{split}/{name}", metrics[name], epoch)
+                print(json.dumps(row, ensure_ascii=False), flush=True)
+                latest = row
+            if enabled:
+                logger.emit("training_completed", final_epoch=(
+                    latest.get("epoch", start_epoch - 1)
+                ))
+        except Exception as exc:
+            if enabled:
+                logger.emit("training_failed", error=repr(exc))
+            raise
     if latest:
         latest["output_dir"] = str(output)
     return latest
@@ -311,8 +411,8 @@ def translate(
 
     lengths = torch.tensor([len(t) for t in encoded])
     src = pad_sequence(encoded, batch_first=True, padding_value=src_vocab.pad_id).to(device)
-    output = model.generate(
-        src, lengths, tgt_vocab.bos_id, tgt_vocab.eos_id,
+    output = DecoderFactory.create(cfg)(
+        model, src, lengths, tgt_vocab.bos_id, tgt_vocab.eos_id,
         int(cfg["training"]["max_new_tokens"]),
     )
     return [

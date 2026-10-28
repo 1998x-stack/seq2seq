@@ -2,7 +2,7 @@ name: python-ci
 
 on:
   push:
-    branches: [main, "feat/**"]
+    branches: [main, ablation, "feat/**"]
   pull_request:
 
 jobs:
@@ -21,4 +21,29 @@ jobs:
       - name: Test offline
         run: pytest -q
       - name: Import CLI
-        run: seq2seq --help
+        run: |
+          seq2seq --help
+          seq2seq factory plan --spec configs/factory/smoke_factory.yaml
+      - name: Paper factory smoke test
+        run: |
+          seq2seq factory run --spec configs/factory/smoke_factory.yaml \
+            --output runs/ci-paper-factory --max-examples 4 --limit 1 \
+            --split validation
+          seq2seq factory visualize --output runs/ci-paper-factory
+          test -s runs/ci-paper-factory/dashboard.html
+      - name: Generate offline toy dashboard
+        run: |
+          seq2seq experiments run -c configs/smoke.yaml \
+            --output runs/ci-ablation --seeds 42 --split-seed 2026 \
+            --max-examples 4 --limit 1 --dashboard
+          test -s runs/ci-ablation/dashboard.html
+          grep -q 'Seq2Seq' runs/ci-ablation/dashboard.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: seq2seq-offline-smoke-dashboard
+          path: |
+            runs/ci-ablation/dashboard.html
+            runs/ci-paper-factory/dashboard.html
+            runs/ci-ablation/**/metrics.csv
+            runs/ci-ablation/**/events.jsonl
+          retention-days: 7

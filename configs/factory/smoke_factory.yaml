@@ -1,0 +1,23 @@
+base_config: configs/smoke.yaml
+split_seed: 2026
+seeds: [7]
+variants:
+  - id: baseline
+    scope: smoke
+    hypothesis: "Test factory training and beam decoding"
+    overrides:
+      model.initialization: uniform
+      training.optimizer: sgd
+      training.learning_rate: 0.01
+      training.loss: sequence_nll
+      training.batching: length_bucket
+      training.scheduler: constant
+      decoding.strategy: beam
+      decoding.beam_size: 2
+  - id: reversed
+    scope: smoke
+    hypothesis: "Check second manifest condition"
+    overrides:
+      model.reverse_source: true
+      model.initialization: uniform
+      decoding.strategy: greedy

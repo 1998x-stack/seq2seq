@@ -1,0 +1,46 @@
+# One-factor-at-a-time paper-inspired experiments, with clearly labelled
+# modern extensions. NOT an exact WMT14 corpus/metric reproduction.
+base_config: configs/factory/paper_small_opus.yaml
+split_seed: 2026
+seeds: [42, 43, 44]
+variants:
+  - id: paper_fixed_reverse
+    scope: paper_inspired
+    hypothesis: "Fixed-state LSTM with reversed source establishes shorter time lags"
+    overrides: {}
+  - id: no_reverse
+    scope: paper_inspired
+    hypothesis: "Source reversal benefits the original fixed-state architecture"
+    overrides: {model.reverse_source: false}
+  - id: shallow_1layer
+    scope: paper_inspired
+    hypothesis: "Depth affects conditional translation probability"
+    overrides: {model.num_layers: 1}
+  - id: deeper_4layer
+    scope: paper_inspired
+    hypothesis: "Four layers vs two under the same training-epoch budget"
+    overrides: {model.num_layers: 4}
+  - id: pytorch_initialization
+    scope: paper_inspired
+    hypothesis: "Paper uniform initialization vs PyTorch default"
+    overrides: {model.initialization: pytorch_default}
+  - id: random_batches
+    scope: paper_inspired
+    hypothesis: "Length buckets improve token throughput"
+    overrides: {training.batching: random}
+  - id: modern_adamw_token_loss
+    scope: modern_extension
+    hypothesis: "Joint modern optimizer+objective; not isolated causal factor"
+    overrides: {training.optimizer: adamw, training.learning_rate: 0.001, training.loss: token_ce}
+  - id: additive_attention
+    scope: modern_extension
+    hypothesis: "Later attention mechanism reduces fixed-vector bottleneck"
+    overrides: {model.attention: true}
+  - id: vanilla_rnn
+    scope: speculative_hypothesis_2014
+    hypothesis: "Ordinary RNN with reversal, not empirically verified in paper"
+    overrides: {model.cell: rnn}
+  - id: greedy_decoder
+    scope: decoding_only
+    hypothesis: "Greedy vs beam width 2; future work reuses shared weights"
+    overrides: {decoding.strategy: greedy}

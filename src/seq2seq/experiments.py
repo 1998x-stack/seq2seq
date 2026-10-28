@@ -16,6 +16,7 @@ import yaml
 
 from seq2seq.config import load_config
 from seq2seq.engine import evaluate, train
+from seq2seq.telemetry import RunLogger
 
 BASELINES: tuple[tuple[str, bool, bool], ...] = (
     ("rnn", False, False),
@@ -60,43 +61,77 @@ def run_matrix(
     plan = make_plan(load_config(config_path), seeds, split_seed)
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
-    (root / "plan.json").write_text(
-        json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    manifest_path = root / "plan.json"
+    if manifest_path.exists():
+        saved = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if saved != plan:
+            raise ValueError("Experiment plan differs from existing plan.json; use another root")
+    else:
+        manifest_path.write_text(
+            json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
     results = []
-    for item in plan[:limit] if limit is not None else plan:
-        dirname = root / item["name"] / f"seed-{item['seed']}"
-        path = dirname / "result.json"
-        if path.exists():
-            record = json.loads(path.read_text(encoding="utf-8"))
-            if record.get("config") != item["config"]:
-                raise ValueError(f"Saved experiment config changed: {path}")
-            results.append(record)
-            continue
-        if (dirname / "last.pt").exists():
-            raise FileExistsError(
-                f"Incomplete run exists at {dirname}; inspect and resume explicitly"
+    with RunLogger(root, name="ablation") as logger:
+        logger.emit("matrix_started", planned=len(plan), selected=(
+            len(plan[:limit]) if limit is not None else len(plan)
+        ), output_dir=str(root))
+        for item in plan[:limit] if limit is not None else plan:
+            dirname = root / item["name"] / f"seed-{item['seed']}"
+            path = dirname / "result.json"
+            if path.exists():
+                record = json.loads(path.read_text(encoding="utf-8"))
+                if record.get("config") != item["config"]:
+                    raise ValueError(f"Saved experiment config changed: {path}")
+                logger.emit(
+                    "run_reused", variant=item["name"], seed=item["seed"],
+                    checkpoint=str(dirname / "best.pt"),
+                )
+                results.append(record)
+                continue
+            if (dirname / "last.pt").exists():
+                logger.emit("run_incomplete", variant=item["name"], seed=item["seed"])
+                raise FileExistsError(
+                    f"Incomplete run exists at {dirname}; inspect and resume explicitly"
+                )
+            dirname.mkdir(parents=True, exist_ok=True)
+            (dirname / "experiment.yaml").write_text(
+                yaml.safe_dump(item["config"], sort_keys=False), encoding="utf-8"
             )
-        dirname.mkdir(parents=True, exist_ok=True)
-        (dirname / "experiment.yaml").write_text(
-            yaml.safe_dump(item["config"], sort_keys=False), encoding="utf-8"
-        )
-        train(item["config"], dirname)
-        outcome = evaluate(
-            dirname / "best.pt", split="test", max_examples=max_examples,
-            device_name=str(item["config"]["training"].get("device", "auto")),
-            predictions_path=dirname / "predictions.jsonl",
-        )
-        metadata = json.loads((dirname / "metadata.json").read_text(encoding="utf-8"))
-        record = {
-            "name": item["name"], "seed": item["seed"], "split_seed": item["split_seed"],
-            "config": item["config"], "data_fingerprint": metadata["data_fingerprint"],
-            "metrics": outcome,
-        }
-        path.write_text(
-            json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
-        results.append(record)
+            logger.emit("run_started", variant=item["name"], seed=item["seed"])
+            try:
+                train(item["config"], dirname)
+                outcome = evaluate(
+                    dirname / "best.pt", split="test", max_examples=max_examples,
+                    device_name=str(item["config"]["training"].get("device", "auto")),
+                    predictions_path=dirname / "predictions.jsonl",
+                )
+                metadata = json.loads(
+                    (dirname / "metadata.json").read_text(encoding="utf-8")
+                )
+                record = {
+                    "name": item["name"], "seed": item["seed"],
+                    "split_seed": item["split_seed"], "config": item["config"],
+                    "data_fingerprint": metadata["data_fingerprint"], "metrics": outcome,
+                }
+                # Write a complete result atomically: this marks the run as finished.
+                tmp = path.with_suffix(".json.tmp")
+                tmp.write_text(
+                    json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8"
+                )
+                tmp.replace(path)
+                logger.emit(
+                    "run_completed", variant=item["name"], seed=item["seed"],
+                    bleu=outcome.get("bleu"), nll=outcome["nll"],
+                    tokens_per_second=None,
+                )
+                results.append(record)
+            except Exception as exc:
+                logger.emit(
+                    "run_failed", variant=item["name"], seed=item["seed"],
+                    error=repr(exc),
+                )
+                raise
+        logger.emit("matrix_completed", finished=len(results), planned=len(plan))
     return results
 
 
@@ -108,6 +143,10 @@ def summarize(root: str | Path) -> dict[str, Any]:
     if not records:
         raise FileNotFoundError("No completed experiments found")
     fingerprints = {item["data_fingerprint"] for item in records}
+    evaluated_counts = {r["metrics"].get("generated_examples") for r in records}
+    signatures = {r["metrics"].get("bleu_signature") for r in records}
+    if len(evaluated_counts) > 1 or len(signatures) > 1:
+        raise ValueError("Comparability failure: generation sample count or BLEU signature differs")
     if len(fingerprints) != 1:
         raise ValueError(
             "Comparability failure: corpus splits or preprocessing differ across experiments"
@@ -117,8 +156,12 @@ def summarize(root: str | Path) -> dict[str, Any]:
         grouped[rec["name"]].append(rec)
     report: dict[str, Any] = {
         "completed_runs": len(records),
-        "expected_runs": len(BASELINES) * len({r["seed"] for r in records}),
+        "expected_runs": len(json.loads((Path(root) / "plan.json").read_text(encoding="utf-8")))
+        if (Path(root) / "plan.json").exists()
+        else len(BASELINES) * len({r["seed"] for r in records}),
         "data_fingerprint": next(iter(fingerprints)),
+        "generation_sample_count": next(iter(evaluated_counts)),
+        "bleu_signature": next(iter(signatures)),
         "models": {},
     }
     for name, group in sorted(grouped.items()):

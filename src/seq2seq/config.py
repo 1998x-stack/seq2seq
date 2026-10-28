@@ -56,6 +56,44 @@ def validate_config(cfg: dict[str, Any]) -> None:
         raise ValueError("training.epochs must be positive")
     if float(training.get("learning_rate", 0)) <= 0:
         raise ValueError("training.learning_rate must be positive")
+    if model.get("architecture", "encoder_decoder") != "encoder_decoder":
+        raise ValueError("Unsupported model.architecture")
+    if model.get("initialization", "pytorch_default") not in ("pytorch_default", "uniform"):
+        raise ValueError("Unknown model.initialization")
+    if float(model.get("init_range", 0.08)) <= 0:
+        raise ValueError("model.init_range must be positive")
+    if training.get("optimizer", "adamw") not in ("adamw", "sgd"):
+        raise ValueError("Unknown training.optimizer")
+    if training.get("loss", "token_ce") not in ("token_ce", "sequence_nll"):
+        raise ValueError("Unknown training.loss")
+    if training.get("batching", "random") not in ("random", "length_bucket"):
+        raise ValueError("Unknown training.batching")
+    if int(training.get("pool_multiplier", 50)) <= 0:
+        raise ValueError("training.pool_multiplier must be positive")
+    for field in ("src_vocab_size", "tgt_vocab_size"):
+        if field in cfg["tokenizer"] and int(cfg["tokenizer"][field]) < 4:
+            raise ValueError(f"tokenizer.{field} must be at least four")
+    decoding = cfg.get("decoding", {})
+    if not isinstance(decoding, dict):
+        raise TypeError("decoding must be a mapping")
+    if decoding.get("strategy", "greedy") not in ("greedy", "beam"):
+        raise ValueError("Unknown decoding.strategy")
+    if int(decoding.get("beam_size", 2)) < 1:
+        raise ValueError("decoding.beam_size must be positive")
+    if float(decoding.get("length_penalty", 0.0)) < 0:
+        raise ValueError("decoding.length_penalty cannot be negative")
+    scheduler = training.get("scheduler", "constant")
+    if isinstance(scheduler, dict):
+        if scheduler.get("name", "constant") not in ("constant", "paper_halving"):
+            raise ValueError("Unknown training.scheduler")
+        if float(scheduler.get("interval_epochs", 0.5)) <= 0:
+            raise ValueError("training.scheduler.interval_epochs must be positive")
+    elif scheduler not in ("constant", "paper_halving"):
+        raise ValueError("Unknown training.scheduler")
+    if not isinstance(cfg.get("logging", {}), dict):
+        raise TypeError("logging must be a YAML mapping")
+    if int(cfg.get("logging", {}).get("log_every_steps", 20)) < 0:
+        raise ValueError("logging.log_every_steps must be nonnegative")
     for field in ("teacher_forcing", "label_smoothing"):
         value = float(training.get(field, 0))
         if not 0 <= value <= 1:
