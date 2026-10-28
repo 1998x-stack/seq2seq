@@ -40,6 +40,16 @@ Acceptance: offline tests/CI pass, then execute all 18 real corpus runs, compare
 - [ ] AMP and gradient accumulation for constrained GPUs.
 - [ ] Subword tokenizer with tokenizer-version tracking.
 
+## Stage 03b — paper1409 Factory Mode (in progress)
+
+- [x] Factory-powered RNN/LSTM, optimizer, loss and decoding choices.
+- [x] Paper-style uniform initialization, sequence NLL, SGD and half-epoch LR schedule.
+- [x] Length-bucket mini-batch sampling and reference Beam Search.
+- [x] Config-driven paper-vs-modern ablation matrix and related documentation.
+- [ ] True 7.5-epoch stop, ensemble and SMT n-best rescoring.
+- [ ] Reproduce original WMT14 corpus, preprocessing and evaluation.
+- [ ] Run full OPUS factory matrix and obtain independent measured results.
+
 ## Stage 04 — rigorous architecture comparisons
 
 - [ ] GRU and bidirectional encoders with explicit state bridge.

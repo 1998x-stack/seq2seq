@@ -1,0 +1,61 @@
+# Practical paper-inspired baseline on OPUS Books; NOT a WMT14 reproduction.
+seed: 42
+dataset:
+  backend: huggingface
+  name: Helsinki-NLP/opus_books
+  subset: en-fr
+  revision: 1f9f619
+  split: train
+  source_lang: en
+  target_lang: fr
+  split_seed: 2026
+  split_strategy: random
+  max_samples: 30000
+  min_length: 1
+  max_length: 65
+  validation_fraction: 0.05
+  test_fraction: 0.05
+tokenizer:
+  lowercase: true
+  vocab_size: 12000
+  min_freq: 2
+model:
+  architecture: encoder_decoder
+  cell: lstm
+  embedding_dim: 256
+  hidden_dim: 256
+  num_layers: 2
+  dropout: 0.0
+  attention: false
+  reverse_source: true
+  initialization: uniform
+  init_range: 0.08
+training:
+  device: auto
+  epochs: 8
+  batch_size: 64
+  num_workers: 0
+  learning_rate: 0.7
+  weight_decay: 0.0
+  optimizer: sgd
+  momentum: 0.0
+  loss: sequence_nll
+  scheduler:
+    name: paper_halving
+    begin_epoch: 5.0
+    interval_epochs: 0.5
+    gamma: 0.5
+  batching: length_bucket
+  pool_multiplier: 50
+  grad_clip: 5.0
+  teacher_forcing: 1.0
+  label_smoothing: 0.0
+  max_new_tokens: 80
+decoding:
+  strategy: beam
+  beam_size: 2
+  length_penalty: 0.0
+logging:
+  enabled: true
+  log_every_steps: 20
+  tensorboard: false
